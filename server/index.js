@@ -8,6 +8,12 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
+// Root route
+app.get('/', (_req, res) => {
+    res.send("Welcome to Angelica's Project API 🚀");
+});
+
+// Health check route
 app.get('/health', (_req, res) => {
     res.json({ status: 'ok', env: process.env.NODE_ENV || 'development' });
 });
