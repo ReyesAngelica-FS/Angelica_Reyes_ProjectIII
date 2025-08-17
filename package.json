@@ -1,0 +1,20 @@
+{
+  "name": "angelica_reyes_projectiii",
+  "version": "1.0.0",
+  "description": "# Project Name:",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "nodemon server/index.js",
+    "start": "node server/index.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

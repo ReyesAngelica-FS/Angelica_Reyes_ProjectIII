@@ -23,10 +23,6 @@ A brief description of your project:
 List all software and tools needed:
 - Node.js vXX.X.X
 - npm vX.X.X
+- MongoDB (local or Atlas)
+- Browser (latest Chrome/Firefox)
 - Git
-
-## Getting Started
-Step-by-step setup instructions:
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/project-name.git
