@@ -1,22 +1,46 @@
 import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/useAuth.js";
 
+// Helper: read a param from either ?search or #hash
+function readParam(name, search, hash) {
+    const qs = new URLSearchParams(search);
+    if (qs.has(name)) return qs.get(name);
+    if (hash) {
+        const hs = new URLSearchParams(hash.replace(/^#/, ""));
+        if (hs.has(name)) return hs.get(name);
+    }
+    return null;
+}
+
 export default function Callback() {
-    const nav = useNavigate();
     const { loginWithToken } = useAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
 
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get("token");
+        const token = readParam("token", location.search, location.hash);
+        const error = readParam("error", location.search, location.hash);
+
+        if (error) {
+        console.error("OAuth error:", error);
+        navigate("/login", { replace: true });
+        return;
+        }
 
         if (token) {
         loginWithToken(token);
-        nav("/dashboard", { replace: true });
+        navigate("/search", { replace: true });
         } else {
-        nav("/login", { replace: true });
+        // No token provided → back to login
+        navigate("/login", { replace: true });
         }
-    }, [loginWithToken, nav]);
+    }, [location.search, location.hash, loginWithToken, navigate]);
 
-    return null; // or "Signing you in…"
+    // Tiny inline status (optional)
+    return (
+        <div className="center">
+        <div className="sub">Signing you in…</div>
+        </div>
+    );
 }

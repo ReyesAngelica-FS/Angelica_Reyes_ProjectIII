@@ -1,18 +1,39 @@
+// client/src/pages/Login.jsx
+import { Navigate } from "react-router-dom";
+import TopBar from "../components/TopBar.jsx";
+import SpotifyMark from "../components/SpotifyMark.jsx";
+import { useAuth } from "../auth/useAuth.js";
+
 export default function Login() {
-    const connect = () => {
-        // Kicks off Spotify OAuth via your backend
-        window.location.href = import.meta.env.VITE_SPOTIFY_LOGIN_URL;
+    const { token } = useAuth();
+
+    // If already authenticated, skip login page
+    if (token) return <Navigate to="/search" replace />;
+
+    const loginUrl = import.meta.env.VITE_SPOTIFY_LOGIN_URL || "/auth/login";
+    const handleConnect = () => {
+        window.location.href = loginUrl; // kicks off OAuth via your backend
     };
-    
-        return (
-            <main className="min-h-screen flex items-center justify-center">
-                <div style={{ maxWidth: 420, width: "100%", textAlign: "center" }}>
-                    <h1>Welcome</h1>
-                    <p>Authorize your Spotify account to continue.</p>
-                    <button onClick={connect} style={{ padding: "0.75rem 1rem", marginTop: 12 }}>
-                        Connect with Spotify
-                    </button>
+
+    return (
+        <>
+        <TopBar />
+        <div className="center">
+            <div className="login-card">
+            <div style={{ display: "grid", placeItems: "center", gap: 10 }}>
+                <SpotifyMark size={44} />
+                <div className="login-title">Please Login</div>
+                <div className="sub">
+                To search shows and episodes, connect your Spotify account.
                 </div>
-            </main>
-        );
+            </div>
+            <div style={{ display: "grid", placeItems: "center", marginTop: 6 }}>
+                <button onClick={handleConnect} aria-label="Login with Spotify">
+                Connect with Spotify
+                </button>
+            </div>
+            </div>
+        </div>
+        </>
+    );
 }
