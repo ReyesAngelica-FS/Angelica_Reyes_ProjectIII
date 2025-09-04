@@ -1,34 +1,25 @@
-// client/src/App.jsx
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import AuthProvider from "./auth/AuthContext.jsx";
 import ProtectedRoute from "./auth/ProtectedRoute.jsx";
 
-// Pages
 import Login from "./pages/Login.jsx";
 import Callback from "./pages/Callback.jsx";
 import SearchPodcasts from "./pages/SearchPodcasts.jsx";
-// Optional extras:
-// import Dashboard from "./pages/Dashboard.jsx";
-// import Playlists from "./pages/Playlists.jsx";
 
 export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {/* Public routes */}
+          {/* Public */}
           <Route path="/login" element={<Login />} />
-          <Route path="/auth/callback" element={<Callback />} />
+          {/* NOTE: callback is now at /callback (not /auth/callback) */}
+          <Route path="/callback" element={<Callback />} />
 
-          {/* Protected routes */}
+          {/* Protected */}
           <Route element={<ProtectedRoute />}>
-            {/* Default → /search */}
             <Route path="/" element={<Navigate to="/search" replace />} />
             <Route path="/search" element={<SearchPodcasts />} />
-            {/* Optional:
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/playlists" element={<Playlists />} />
-            */}
           </Route>
 
           {/* Fallback */}

@@ -1,214 +1,110 @@
-import express from 'express';
-import jwt from 'jsonwebtoken';
-import { ObjectId } from 'mongodb';
+import { Router } from "express";
+import jwt from "jsonwebtoken";
+import { setSpotifyTokens } from "../tokenStore.js";
 
-const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
-const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
+const router = Router();
 
-function buildSpotifyAuthURL() {
+const {
+    SPOTIFY_CLIENT_ID,
+    SPOTIFY_CLIENT_SECRET,
+    SPOTIFY_REDIRECT_URI,   // e.g. http://127.0.0.1:8080/auth/callback
+    FRONTEND_URL,           // e.g. http://localhost:5173
+    JWT_SECRET,
+    JWT_EXPIRES_IN = "7d",
+} = process.env;
+
+// Step 1: send user to Spotify
+router.get("/auth/login", (_req, res) => {
+    const SCOPES = [
+        "user-read-email",
+        "user-read-private",
+    ].join(" ");
+
     const params = new URLSearchParams({
-        client_id: process.env.SPOTIFY_CLIENT_ID,
-        response_type: 'code',
-        redirect_uri: process.env.SPOTIFY_REDIRECT_URI,
-        scope: process.env.SPOTIFY_SCOPES || 'user-read-email user-read-private',
-    });
-    return `${SPOTIFY_AUTH_URL}?${params.toString()}`;
-}
-
-async function exchangeCodeForTokens(code) {
-    const body = new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: process.env.SPOTIFY_REDIRECT_URI,
-        client_id: process.env.SPOTIFY_CLIENT_ID,
-        client_secret: process.env.SPOTIFY_CLIENT_SECRET,
+        client_id: SPOTIFY_CLIENT_ID,
+        response_type: "code",
+        redirect_uri: SPOTIFY_REDIRECT_URI,
+        scope: SCOPES,
     });
 
-    const r = await fetch(SPOTIFY_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-    });
-    if (!r.ok) throw new Error(`Token exchange failed: ${r.status} ${await r.text()}`);
-    return r.json(); // { access_token, refresh_token, expires_in, scope, token_type }
-}
+    res.redirect(`https://accounts.spotify.com/authorize?${params.toString()}`);
+});
 
-async function getSpotifyProfile(accessToken) {
-    const r = await fetch('https://api.spotify.com/v1/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!r.ok) throw new Error(`/v1/me failed: ${r.status} ${await r.text()}`);
-    return r.json();
-}
-
-async function saveSpotifyAccessToken(Users, userId, accessToken, expiresInSeconds) {
-  const expiresAt = new Date(Date.now() + (expiresInSeconds - 30) * 1000); // safety buffer
-    await Users.updateOne(
-        { _id: new ObjectId(userId) },
-        { $set: { spotifyAccessToken: accessToken, spotifyAccessTokenExpiresAt: expiresAt } }
-    );
-}
-
-async function createSessionJWT(Sessions, userId) {
-    const jti = new ObjectId().toString();
-    const token = jwt.sign({ sub: userId.toString(), jti }, process.env.JWT_SECRET, {
-        expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-    });
-
-    const now = new Date();
-    const exp = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    await Sessions.insertOne({ userId: new ObjectId(userId), jti, createdAt: now, expiresAt: exp });
-
-    return token;
-}
-
-export default function createAuthRouter({ Users, Sessions }) {
-    const router = express.Router();
-
-    // Start login
-    router.get('/login', (_req, res) => {
-        res.redirect(buildSpotifyAuthURL());
-    });
-
-    // OAuth callback
-    router.get('/callback', async (req, res) => {
-        try {
-        const code = req.query.code;
-        if (!code) return res.status(400).send('Missing code');
-
-        const tokens = await exchangeCodeForTokens(code);
-        const me = await getSpotifyProfile(tokens.access_token);
-
-        // Upsert user
-        const existing = await Users.findOne({ spotifyId: me.id });
-        let userId;
-        if (existing) {
-            userId = existing._id;
-            await Users.updateOne(
-            { _id: existing._id },
-            { $set: { displayName: me.display_name || me.id, avatar: me.images?.[0]?.url || null } }
-            );
-        } else {
-            const r = await Users.insertOne({
-            spotifyId: me.id,
-            displayName: me.display_name || me.id,
-            avatar: me.images?.[0]?.url || null,
-            createdAt: new Date(),
-            });
-            userId = r.insertedId;
+// Step 2: Spotify redirects back to server with ?code=
+router.get("/auth/callback", async (req, res, next) => {
+    try {
+        const { code, error } = req.query;
+        if (error) {
+        return res.redirect(
+            `${FRONTEND_URL}/callback?error=${encodeURIComponent(error)}`
+        );
         }
+        if (!code) return res.status(400).send("Missing code");
 
-        // Persist refresh token & cache access token
-        if (tokens.refresh_token) {
-            await Users.updateOne({ _id: userId }, { $set: { spotifyRefreshToken: tokens.refresh_token } });
-        }
-        await saveSpotifyAccessToken(Users, userId, tokens.access_token, tokens.expires_in);
-
-        // Issue app JWT + session
-        const appJwt = await createSessionJWT(Sessions, userId);
-        res.cookie('app_jwt', appJwt, { httpOnly: true, sameSite: 'lax', secure: false });
-
-        res.redirect('/');
-        } catch (err) {
-        console.error(err);
-        res.status(500).send('Auth error');
-        }
-    });
-
-    // Auth status: true/false + needsSpotifyLogin
-    router.get('/status', async (req, res) => {
-        try {
-        const bearer = req.header('Authorization')?.replace('Bearer ', '');
-        const raw = req.cookies?.app_jwt || bearer;
-        if (!raw) return res.json({ authenticated: false, needsSpotifyLogin: true });
-
-        let decoded;
-        try {
-            decoded = jwt.verify(raw, process.env.JWT_SECRET);
-        } catch {
-            return res.json({ authenticated: false, needsSpotifyLogin: true });
-        }
-
-        const session = await Sessions.findOne({ jti: decoded.jti, userId: new ObjectId(decoded.sub) });
-        if (!session) return res.json({ authenticated: false, needsSpotifyLogin: true });
-
-        const user = await Users.findOne({ _id: new ObjectId(decoded.sub) }, { projection: { spotifyRefreshToken: 1 } });
-        const needsSpotifyLogin = !user?.spotifyRefreshToken;
-
-        res.json({ authenticated: true, needsSpotifyLogin, userId: decoded.sub, sessionJti: decoded.jti });
-        } catch {
-        res.json({ authenticated: false, needsSpotifyLogin: true });
-        }
-    });
-
-    // Rotate app JWT (renew)
-    router.post('/renew', async (req, res) => {
-        try {
-        const bearer = req.header('Authorization')?.replace('Bearer ', '');
-        const raw = req.cookies?.app_jwt || bearer;
-        if (!raw) return res.status(401).json({ error: 'Missing token' });
-
-        const decoded = jwt.verify(raw, process.env.JWT_SECRET);
-        await Sessions.deleteOne({ jti: decoded.jti, userId: new ObjectId(decoded.sub) }).catch(() => {});
-        const newJwt = await createSessionJWT(Sessions, decoded.sub);
-
-        res.cookie('app_jwt', newJwt, { httpOnly: true, sameSite: 'lax', secure: false });
-        res.json({ ok: true });
-        } catch (e) {
-        res.status(401).json({ error: 'Cannot renew token' });
-        }
-    });
-
-    // Logout
-    router.post('/logout', async (req, res) => {
-        try {
-        const bearer = req.header('Authorization')?.replace('Bearer ', '');
-        const raw = req.cookies?.app_jwt || bearer;
-        if (!raw) return res.json({ ok: true });
-
-        const decoded = jwt.verify(raw, process.env.JWT_SECRET);
-        await Sessions.deleteMany({ userId: new ObjectId(decoded.sub) });
-        res.clearCookie('app_jwt');
-        res.json({ ok: true });
-        } catch {
-        res.json({ ok: true });
-        }
-    });
-
-    // Manual refresh (optional test endpoint)
-    router.post('/refresh', async (req, res) => {
-        try {
-        const bearer = req.header('Authorization')?.replace('Bearer ', '');
-        const raw = req.cookies?.app_jwt || bearer;
-        if (!raw) return res.status(401).json({ error: 'Missing token' });
-
-        const decoded = jwt.verify(raw, process.env.JWT_SECRET);
-        const user = await Users.findOne({ _id: new ObjectId(decoded.sub) });
-        if (!user?.spotifyRefreshToken) return res.status(400).json({ error: 'No refresh token' });
-
+        // Exchange code for tokens
         const body = new URLSearchParams({
-            grant_type: 'refresh_token',
-            refresh_token: user.spotifyRefreshToken,
-            client_id: process.env.SPOTIFY_CLIENT_ID,
-            client_secret: process.env.SPOTIFY_CLIENT_SECRET,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: SPOTIFY_REDIRECT_URI,
         });
+        const basic = Buffer
+        .from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`)
+        .toString("base64");
 
-        const r = await fetch(SPOTIFY_TOKEN_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body,
+        const tokRes = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST",
+        headers: {
+            Authorization: `Basic ${basic}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
         });
-        if (!r.ok) return res.status(400).json({ error: `Refresh failed: ${await r.text()}` });
-
-        const data = await r.json(); // { access_token, expires_in, ... }
-        // Cache new access token
-        await saveSpotifyAccessToken(Users, decoded.sub, data.access_token, data.expires_in);
-        res.json({ accessToken: data.access_token, expiresIn: data.expires_in });
-        } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: 'Refresh error' });
+        const tok = await tokRes.json();
+        if (!tokRes.ok) {
+        return res.redirect(
+            `${FRONTEND_URL}/callback?error=${encodeURIComponent(tok.error_description || "token_exchange_failed")}`
+        );
         }
-    });
 
-    return router;
-}
+        // Identify user
+        const meRes = await fetch("https://api.spotify.com/v1/me", {
+        headers: { Authorization: `Bearer ${tok.access_token}` },
+        });
+        const me = await meRes.json();
+        if (!meRes.ok || !me?.id) {
+        return res.redirect(
+            `${FRONTEND_URL}/callback?error=${encodeURIComponent("profile_lookup_failed")}`
+        );
+        }
+
+        // Store Spotify tokens (in-memory for class)
+        setSpotifyTokens(me.id, {
+        accessToken: tok.access_token,
+        refreshToken: tok.refresh_token,
+        expiresIn: tok.expires_in, // seconds
+        });
+
+        // Mint app JWT (sub = Spotify user id)
+        const appJwt = jwt.sign({ sub: me.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+        // IMPORTANT: redirect to frontend **/callback** (NOT /auth/callback)
+        return res.redirect(`${FRONTEND_URL}/callback?token=${encodeURIComponent(appJwt)}`);
+    } catch (e) {
+        next(e);
+    }
+});
+
+// Optional: client uses this to validate its JWT
+router.get("/auth/verify", (req, res) => {
+    try {
+        const hdr = req.headers.authorization || "";
+        const [, token] = hdr.split(" ");
+        if (!token) return res.status(401).json({ ok: false, error: "missing" });
+        jwt.verify(token, JWT_SECRET);
+        return res.json({ ok: true });
+    } catch {
+        return res.status(401).json({ ok: false, error: "invalid" });
+    }
+});
+
+export default router;
